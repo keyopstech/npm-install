@@ -6,9 +6,13 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
-      - uses: pnpm/action-setup@v2.0.1
+      - name: Setup Node.js environment
+        uses: actions/setup-node@v2.1.4
         with:
-          version: 6.0.2
+          node-version: '14'
+
+      - name: install pnpm
+        run: npm i -g pnpm@6.25.1
 
       - uses: ./
         with:
