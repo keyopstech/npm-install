@@ -3025,7 +3025,7 @@ const install = (opts = {}) => {
       core.debug(
         `pnpm command: "${pnpmPath}" ${args} ${JSON.stringify(options)}`
       )
-      return exec.exec(quote(pnpmPath), args, options)
+      return exec.exec(quote(`${pnpmPath} install`), args, options)
     })
   }
 
