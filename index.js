@@ -53,6 +53,16 @@ const saveCachedNpm = npmCache => {
     })
 }
 
+/**
+ * Simple naive function to avoid using a nested ternary 😅
+ * @param {boolean} condition
+ * @param {*} then
+ * @param {*} otherwise
+ * @returns {unknown}
+ */
+const iCondThenOtherwise = (condition, then, otherwise) =>
+  condition ? then : otherwise
+
 const hasOption = (name, o) => name in o
 
 const install = (opts = {}) => {
@@ -72,6 +82,7 @@ const install = (opts = {}) => {
     throw new Error('Missing workingDirectory option')
   }
 
+  const isUsingPnpm = opts.usePnpm
   const shouldUseYarn = opts.useYarn
   const shouldUsePackageLock = opts.usePackageLock
   const npmCacheFolder = opts.npmCacheFolder
@@ -90,6 +101,19 @@ const install = (opts = {}) => {
   if (opts.installCommand) {
     core.debug(`installing using custom command "${opts.installCommand}"`)
     return exec.exec(opts.installCommand, [], options)
+  }
+
+  if (isUsingPnpm) {
+    console.log('installing NPM deps using Pnpm')
+    return io.which('pnpm', true).then(pnpmPath => {
+      console.log('pnpm at "%s"', pnpmPath)
+
+      const args = shouldUsePackageLock ? ['--frozen-lockfile'] : []
+      core.debug(
+        `pnpm command: "${pnpmPath}" ${args} ${JSON.stringify(options)}`
+      )
+      return exec.exec(quote(pnpmPath), args, options)
+    })
   }
 
   if (shouldUseYarn) {
@@ -122,35 +146,56 @@ const getNow = () => new Date()
 const getLockFilename = usePackageLock => workingDirectory => {
   const packageFilename = path.join(workingDirectory, 'package.json')
   const yarnFilename = path.join(workingDirectory, 'yarn.lock')
+  const pnpmFilename = path.join(workingDirectory, 'pnpm-lock.yaml')
+  const usePnpm = fs.existsSync(pnpmFilename)
   const useYarn = fs.existsSync(yarnFilename)
+  const isEitherUsingYarnOrPnpm = useYarn || usePnpm
+
+  if (usePnpm && useYarn) {
+    throw new Error(
+      'Cannot proceed because both yarn.lock and pnpm-lock.yaml exist. Please remove one of them.'
+    )
+  }
 
   if (!usePackageLock) {
     return {
+      usePnpm,
       useYarn,
       lockFilename: packageFilename
     }
   }
 
-  core.debug(`yarn lock file "${yarnFilename}" exists? ${useYarn}`)
+  if (useYarn)
+    core.debug(`yarn lock file "${yarnFilename}" exists. Using yarn.lock`)
+  if (usePnpm)
+    core.debug(`pnpm lock file "${pnpmFilename}" exists. Using pnpm-lock.yaml`)
 
   const npmShrinkwrapFilename = path.join(
     workingDirectory,
     'npm-shrinkwrap.json'
   )
-  const packageLockFilename = path.join(workingDirectory, 'package-lock.json')
+
+  const npmPackageLockFilename = path.join(
+    workingDirectory,
+    'package-lock.json'
+  )
   const npmFilename =
-    !useYarn && fs.existsSync(npmShrinkwrapFilename)
+    !isEitherUsingYarnOrPnpm && fs.existsSync(npmShrinkwrapFilename)
       ? npmShrinkwrapFilename
-      : packageLockFilename
+      : npmPackageLockFilename
 
   const result = {
+    usePnpm,
     useYarn,
-    lockFilename: useYarn ? yarnFilename : npmFilename
+    lockFilename: isEitherUsingYarnOrPnpm
+      ? iCondThenOtherwise(usePnpm, pnpmFilename, yarnFilename)
+      : npmFilename
   }
   return result
 }
 
 const getCacheParams = ({
+  usePnpm,
   useYarn,
   useRollingCache,
   homeDirectory,
@@ -162,7 +207,10 @@ const getCacheParams = ({
   const primaryKeySegments = [platformAndArch]
   let inputPaths, restoreKeys
 
-  if (useYarn) {
+  if (usePnpm) {
+    inputPaths = [path.join(homeDirectory, '.pnpm-store')]
+    primaryKeySegments.unshift('pnpm')
+  } else if (useYarn) {
     inputPaths = [path.join(homeDirectory, '.cache', 'yarn')]
     primaryKeySegments.unshift('yarn')
   } else {
@@ -213,6 +261,7 @@ const installInOneFolder = ({
   const NPM_CACHE_FOLDER = path.join(homeDirectory, '.npm')
 
   const NPM_CACHE = getCacheParams({
+    usePnpm: lockInfo.usePnpm,
     useYarn: lockInfo.useYarn,
     homeDirectory,
     useRollingCache,
@@ -221,6 +270,7 @@ const installInOneFolder = ({
   })
 
   const opts = {
+    usePnpm: lockInfo.usePnpm,
     useYarn: lockInfo.useYarn,
     usePackageLock,
     workingDirectory,

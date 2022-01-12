@@ -26,6 +26,58 @@ describe('action', () => {
     sandbox.stub(core, 'exportVariable').returns()
   })
 
+  context('Is using Pnpm', function() {
+    const pathToPnpm = '/path/to/pnpm'
+    const pnpmFilename = path.join(cwd, 'pnpm-lock.yaml')
+    const pnpmCachePath = [path.join(homedir, '.pnpm-store')]
+    const cacheKey = 'pnpm-platform-arch-hash-from-pnpm-lock-file'
+
+    beforeEach(function() {
+      sandbox
+        .stub(core, 'getInput')
+        .withArgs('useLockFile')
+        .returns()
+
+      sandbox
+        .stub(fs, 'existsSync')
+        .withArgs(pnpmFilename)
+        .returns(true)
+
+      sandbox
+        .stub(io, 'which')
+        .withArgs('pnpm')
+        .resolves(pathToPnpm)
+
+      sandbox
+        .stub(hasha, 'fromFileSync')
+        .withArgs(pnpmFilename)
+        .returns('hash-from-pnpm-lock-file')
+
+      const cacheHit = false
+      this.restoreCache = sandbox.stub(cache, 'restoreCache').resolves(cacheHit)
+      this.saveCache = sandbox.stub(cache, 'saveCache').resolves()
+    })
+
+    it('and uses lock file', async function() {
+      await action.npmInstallAction()
+
+      expect(this.restoreCache).to.be.calledOnceWithExactly(
+        pnpmCachePath,
+        cacheKey,
+        [cacheKey]
+      )
+      expect(this.exec).to.be.calledOnceWithExactly(
+        quote(pathToPnpm),
+        ['--frozen-lockfile'],
+        { cwd }
+      )
+      expect(this.saveCache).to.be.calledOnceWithExactly(
+        pnpmCachePath,
+        cacheKey
+      )
+    })
+  })
+
   context('finds Yarn', function() {
     const pathToYarn = '/path/to/yarn'
     const yarnFilename = path.join(cwd, 'yarn.lock')

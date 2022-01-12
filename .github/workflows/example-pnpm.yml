@@ -1,0 +1,13 @@
+name: example-pnpm
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-20.04
+    steps:
+      - uses: actions/checkout@v2
+      - uses: keyopstech/npm-install@HEAD
+        with:
+          usePnpm: true
+          working-directory: examples/pnpm
+      - run: npm t
+        working-directory: examples/pnpm

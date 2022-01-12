@@ -56,6 +56,25 @@ module.exports =
 
 "use strict";
 
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    Object.defineProperty(o, k2, { enumerable: true, get: function() { return m[k]; } });
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -66,11 +85,14 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-const childProcess = __webpack_require__(129);
-const path = __webpack_require__(622);
+exports.findInPath = exports.which = exports.mkdirP = exports.rmRF = exports.mv = exports.cp = void 0;
+const assert_1 = __webpack_require__(357);
+const childProcess = __importStar(__webpack_require__(129));
+const path = __importStar(__webpack_require__(622));
 const util_1 = __webpack_require__(669);
-const ioUtil = __webpack_require__(672);
+const ioUtil = __importStar(__webpack_require__(672));
 const exec = util_1.promisify(childProcess.exec);
+const execFile = util_1.promisify(childProcess.execFile);
 /**
  * Copies a file or folder.
  * Based off of shelljs - https://github.com/shelljs/shelljs/blob/9237f66c52e5daa40458f94f9565e18e8132f5a6/src/cp.js
@@ -81,14 +103,14 @@ const exec = util_1.promisify(childProcess.exec);
  */
 function cp(source, dest, options = {}) {
     return __awaiter(this, void 0, void 0, function* () {
-        const { force, recursive } = readCopyOptions(options);
+        const { force, recursive, copySourceDirectory } = readCopyOptions(options);
         const destStat = (yield ioUtil.exists(dest)) ? yield ioUtil.stat(dest) : null;
         // Dest is an existing file, but not forcing
         if (destStat && destStat.isFile() && !force) {
             return;
         }
         // If dest is an existing directory, should copy inside.
-        const newDest = destStat && destStat.isDirectory()
+        const newDest = destStat && destStat.isDirectory() && copySourceDirectory
             ? path.join(dest, path.basename(source))
             : dest;
         if (!(yield ioUtil.exists(source))) {
@@ -153,12 +175,22 @@ function rmRF(inputPath) {
         if (ioUtil.IS_WINDOWS) {
             // Node doesn't provide a delete operation, only an unlink function. This means that if the file is being used by another
             // program (e.g. antivirus), it won't be deleted. To address this, we shell out the work to rd/del.
+            // Check for invalid characters
+            // https://docs.microsoft.com/en-us/windows/win32/fileio/naming-a-file
+            if (/[*"<>|]/.test(inputPath)) {
+                throw new Error('File path must not contain `*`, `"`, `<`, `>` or `|` on Windows');
+            }
             try {
+                const cmdPath = ioUtil.getCmdPath();
                 if (yield ioUtil.isDirectory(inputPath, true)) {
-                    yield exec(`rd /s /q "${inputPath}"`);
+                    yield exec(`${cmdPath} /s /c "rd /s /q "%inputPath%""`, {
+                        env: { inputPath }
+                    });
                 }
                 else {
-                    yield exec(`del /f /a "${inputPath}"`);
+                    yield exec(`${cmdPath} /s /c "del /f /a "%inputPath%""`, {
+                        env: { inputPath }
+                    });
                 }
             }
             catch (err) {
@@ -191,7 +223,7 @@ function rmRF(inputPath) {
                 return;
             }
             if (isDir) {
-                yield exec(`rm -rf "${inputPath}"`);
+                yield execFile(`rm`, [`-rf`, `${inputPath}`]);
             }
             else {
                 yield ioUtil.unlink(inputPath);
@@ -209,7 +241,8 @@ exports.rmRF = rmRF;
  */
 function mkdirP(fsPath) {
     return __awaiter(this, void 0, void 0, function* () {
-        yield ioUtil.mkdirP(fsPath);
+        assert_1.ok(fsPath, 'a path argument must be provided');
+        yield ioUtil.mkdir(fsPath, { recursive: true });
     });
 }
 exports.mkdirP = mkdirP;
@@ -237,62 +270,80 @@ function which(tool, check) {
                     throw new Error(`Unable to locate executable file: ${tool}. Please verify either the file path exists or the file can be found within a directory specified by the PATH environment variable. Also check the file mode to verify the file is executable.`);
                 }
             }
+            return result;
         }
-        try {
-            // build the list of extensions to try
-            const extensions = [];
-            if (ioUtil.IS_WINDOWS && process.env.PATHEXT) {
-                for (const extension of process.env.PATHEXT.split(path.delimiter)) {
-                    if (extension) {
-                        extensions.push(extension);
-                    }
-                }
-            }
-            // if it's rooted, return it if exists. otherwise return empty.
-            if (ioUtil.isRooted(tool)) {
-                const filePath = yield ioUtil.tryGetExecutablePath(tool, extensions);
-                if (filePath) {
-                    return filePath;
-                }
-                return '';
-            }
-            // if any path separators, return empty
-            if (tool.includes('/') || (ioUtil.IS_WINDOWS && tool.includes('\\'))) {
-                return '';
-            }
-            // build the list of directories
-            //
-            // Note, technically "where" checks the current directory on Windows. From a toolkit perspective,
-            // it feels like we should not do this. Checking the current directory seems like more of a use
-            // case of a shell, and the which() function exposed by the toolkit should strive for consistency
-            // across platforms.
-            const directories = [];
-            if (process.env.PATH) {
-                for (const p of process.env.PATH.split(path.delimiter)) {
-                    if (p) {
-                        directories.push(p);
-                    }
-                }
-            }
-            // return the first match
-            for (const directory of directories) {
-                const filePath = yield ioUtil.tryGetExecutablePath(directory + path.sep + tool, extensions);
-                if (filePath) {
-                    return filePath;
-                }
-            }
-            return '';
+        const matches = yield findInPath(tool);
+        if (matches && matches.length > 0) {
+            return matches[0];
         }
-        catch (err) {
-            throw new Error(`which failed with message ${err.message}`);
-        }
+        return '';
     });
 }
 exports.which = which;
+/**
+ * Returns a list of all occurrences of the given tool on the system path.
+ *
+ * @returns   Promise<string[]>  the paths of the tool
+ */
+function findInPath(tool) {
+    return __awaiter(this, void 0, void 0, function* () {
+        if (!tool) {
+            throw new Error("parameter 'tool' is required");
+        }
+        // build the list of extensions to try
+        const extensions = [];
+        if (ioUtil.IS_WINDOWS && process.env['PATHEXT']) {
+            for (const extension of process.env['PATHEXT'].split(path.delimiter)) {
+                if (extension) {
+                    extensions.push(extension);
+                }
+            }
+        }
+        // if it's rooted, return it if exists. otherwise return empty.
+        if (ioUtil.isRooted(tool)) {
+            const filePath = yield ioUtil.tryGetExecutablePath(tool, extensions);
+            if (filePath) {
+                return [filePath];
+            }
+            return [];
+        }
+        // if any path separators, return empty
+        if (tool.includes(path.sep)) {
+            return [];
+        }
+        // build the list of directories
+        //
+        // Note, technically "where" checks the current directory on Windows. From a toolkit perspective,
+        // it feels like we should not do this. Checking the current directory seems like more of a use
+        // case of a shell, and the which() function exposed by the toolkit should strive for consistency
+        // across platforms.
+        const directories = [];
+        if (process.env.PATH) {
+            for (const p of process.env.PATH.split(path.delimiter)) {
+                if (p) {
+                    directories.push(p);
+                }
+            }
+        }
+        // find all matches
+        const matches = [];
+        for (const directory of directories) {
+            const filePath = yield ioUtil.tryGetExecutablePath(path.join(directory, tool), extensions);
+            if (filePath) {
+                matches.push(filePath);
+            }
+        }
+        return matches;
+    });
+}
+exports.findInPath = findInPath;
 function readCopyOptions(options) {
     const force = options.force == null ? true : options.force;
     const recursive = Boolean(options.recursive);
-    return { force, recursive };
+    const copySourceDirectory = options.copySourceDirectory == null
+        ? true
+        : Boolean(options.copySourceDirectory);
+    return { force, recursive, copySourceDirectory };
 }
 function cpDirRecursive(sourceDir, destDir, currentDepth, force) {
     return __awaiter(this, void 0, void 0, function* () {
@@ -394,6 +445,25 @@ exports.defaultGetter = defaultGetter;
 
 "use strict";
 
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    Object.defineProperty(o, k2, { enumerable: true, get: function() { return m[k]; } });
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -403,20 +473,15 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
-var __importStar = (this && this.__importStar) || function (mod) {
-    if (mod && mod.__esModule) return mod;
-    var result = {};
-    if (mod != null) for (var k in mod) if (Object.hasOwnProperty.call(mod, k)) result[k] = mod[k];
-    result["default"] = mod;
-    return result;
-};
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.argStringToArray = exports.ToolRunner = void 0;
 const os = __importStar(__webpack_require__(87));
 const events = __importStar(__webpack_require__(614));
 const child = __importStar(__webpack_require__(129));
 const path = __importStar(__webpack_require__(622));
 const io = __importStar(__webpack_require__(1));
 const ioUtil = __importStar(__webpack_require__(672));
+const timers_1 = __webpack_require__(213);
 /* eslint-disable @typescript-eslint/unbound-method */
 const IS_WINDOWS = process.platform === 'win32';
 /*
@@ -486,11 +551,12 @@ class ToolRunner extends events.EventEmitter {
                 s = s.substring(n + os.EOL.length);
                 n = s.indexOf(os.EOL);
             }
-            strBuffer = s;
+            return s;
         }
         catch (err) {
             // streaming lines to console is best effort.  Don't fail a build.
             this._debug(`error processing line. Failed with error ${err}`);
+            return '';
         }
     }
     _getSpawnFileName() {
@@ -772,7 +838,7 @@ class ToolRunner extends events.EventEmitter {
             // if the tool is only a file name, then resolve it from the PATH
             // otherwise verify it exists (add extension on Windows if necessary)
             this.toolPath = yield io.which(this.toolPath, true);
-            return new Promise((resolve, reject) => {
+            return new Promise((resolve, reject) => __awaiter(this, void 0, void 0, function* () {
                 this._debug(`exec tool: ${this.toolPath}`);
                 this._debug('arguments:');
                 for (const arg of this.args) {
@@ -786,9 +852,12 @@ class ToolRunner extends events.EventEmitter {
                 state.on('debug', (message) => {
                     this._debug(message);
                 });
+                if (this.options.cwd && !(yield ioUtil.exists(this.options.cwd))) {
+                    return reject(new Error(`The cwd: ${this.options.cwd} does not exist!`));
+                }
                 const fileName = this._getSpawnFileName();
                 const cp = child.spawn(fileName, this._getSpawnArgs(optionsNonNull), this._getSpawnOptions(this.options, fileName));
-                const stdbuffer = '';
+                let stdbuffer = '';
                 if (cp.stdout) {
                     cp.stdout.on('data', (data) => {
                         if (this.options.listeners && this.options.listeners.stdout) {
@@ -797,14 +866,14 @@ class ToolRunner extends events.EventEmitter {
                         if (!optionsNonNull.silent && optionsNonNull.outStream) {
                             optionsNonNull.outStream.write(data);
                         }
-                        this._processLineBuffer(data, stdbuffer, (line) => {
+                        stdbuffer = this._processLineBuffer(data, stdbuffer, (line) => {
                             if (this.options.listeners && this.options.listeners.stdline) {
                                 this.options.listeners.stdline(line);
                             }
                         });
                     });
                 }
-                const errbuffer = '';
+                let errbuffer = '';
                 if (cp.stderr) {
                     cp.stderr.on('data', (data) => {
                         state.processStderr = true;
@@ -819,7 +888,7 @@ class ToolRunner extends events.EventEmitter {
                                 : optionsNonNull.outStream;
                             s.write(data);
                         }
-                        this._processLineBuffer(data, errbuffer, (line) => {
+                        errbuffer = this._processLineBuffer(data, errbuffer, (line) => {
                             if (this.options.listeners && this.options.listeners.errline) {
                                 this.options.listeners.errline(line);
                             }
@@ -866,7 +935,7 @@ class ToolRunner extends events.EventEmitter {
                     }
                     cp.stdin.end(this.options.input);
                 }
-            });
+            }));
         });
     }
 }
@@ -952,7 +1021,7 @@ class ExecState extends events.EventEmitter {
             this._setResult();
         }
         else if (this.processExited) {
-            this.timeout = setTimeout(ExecState.HandleTimeout, this.delay, this);
+            this.timeout = timers_1.setTimeout(ExecState.HandleTimeout, this.delay, this);
         }
     }
     _debug(message) {
@@ -1071,10 +1140,10 @@ function createTempDirectory() {
     });
 }
 exports.createTempDirectory = createTempDirectory;
-function getArchiveFileSizeIsBytes(filePath) {
+function getArchiveFileSizeInBytes(filePath) {
     return fs.statSync(filePath).size;
 }
-exports.getArchiveFileSizeIsBytes = getArchiveFileSizeIsBytes;
+exports.getArchiveFileSizeInBytes = getArchiveFileSizeInBytes;
 function resolvePaths(patterns) {
     var e_1, _a;
     var _b;
@@ -1543,6 +1612,7 @@ if (typeof Symbol === undefined || !Symbol.asyncIterator) {
 // We use any as a valid input type
 /* eslint-disable @typescript-eslint/no-explicit-any */
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.toCommandProperties = exports.toCommandValue = void 0;
 /**
  * Sanitizes an input into a string so it can be passed into issueCommand safely
  * @param input input to sanitize into a string
@@ -1557,6 +1627,26 @@ function toCommandValue(input) {
     return JSON.stringify(input);
 }
 exports.toCommandValue = toCommandValue;
+/**
+ *
+ * @param annotationProperties
+ * @returns The command properties to send with the actual annotation command
+ * See IssueCommandProperties: https://github.com/actions/runner/blob/main/src/Runner.Worker/ActionCommandManager.cs#L646
+ */
+function toCommandProperties(annotationProperties) {
+    if (!Object.keys(annotationProperties).length) {
+        return {};
+    }
+    return {
+        title: annotationProperties.title,
+        file: annotationProperties.file,
+        line: annotationProperties.startLine,
+        endLine: annotationProperties.endLine,
+        col: annotationProperties.startColumn,
+        endColumn: annotationProperties.endColumn
+    };
+}
+exports.toCommandProperties = toCommandProperties;
 //# sourceMappingURL=utils.js.map
 
 /***/ }),
@@ -2774,14 +2864,27 @@ Object.defineProperty(exports, "__esModule", { value: true });
 "use strict";
 
 // For internal use, subject to change.
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    Object.defineProperty(o, k2, { enumerable: true, get: function() { return m[k]; } });
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
 var __importStar = (this && this.__importStar) || function (mod) {
     if (mod && mod.__esModule) return mod;
     var result = {};
-    if (mod != null) for (var k in mod) if (Object.hasOwnProperty.call(mod, k)) result[k] = mod[k];
-    result["default"] = mod;
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
     return result;
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.issueCommand = void 0;
 // We use any as a valid input type
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const fs = __importStar(__webpack_require__(747));
@@ -2863,6 +2966,16 @@ const saveCachedNpm = npmCache => {
     })
 }
 
+/**
+ * Simple naive function to avoid using a nested ternary 😅
+ * @param {boolean} condition
+ * @param {*} then
+ * @param {*} otherwise
+ * @returns {unknown}
+ */
+const iCondThenOtherwise = (condition, then, otherwise) =>
+  condition ? then : otherwise
+
 const hasOption = (name, o) => name in o
 
 const install = (opts = {}) => {
@@ -2882,6 +2995,7 @@ const install = (opts = {}) => {
     throw new Error('Missing workingDirectory option')
   }
 
+  const isUsingPnpm = opts.usePnpm
   const shouldUseYarn = opts.useYarn
   const shouldUsePackageLock = opts.usePackageLock
   const npmCacheFolder = opts.npmCacheFolder
@@ -2900,6 +3014,19 @@ const install = (opts = {}) => {
   if (opts.installCommand) {
     core.debug(`installing using custom command "${opts.installCommand}"`)
     return exec.exec(opts.installCommand, [], options)
+  }
+
+  if (isUsingPnpm) {
+    console.log('installing NPM deps using Pnpm')
+    return io.which('pnpm', true).then(pnpmPath => {
+      console.log('pnpm at "%s"', pnpmPath)
+
+      const args = shouldUsePackageLock ? ['--frozen-lockfile'] : []
+      core.debug(
+        `pnpm command: "${pnpmPath}" ${args} ${JSON.stringify(options)}`
+      )
+      return exec.exec(quote(pnpmPath), args, options)
+    })
   }
 
   if (shouldUseYarn) {
@@ -2931,36 +3058,57 @@ const getNow = () => new Date()
 
 const getLockFilename = usePackageLock => workingDirectory => {
   const packageFilename = path.join(workingDirectory, 'package.json')
+  const yarnFilename = path.join(workingDirectory, 'yarn.lock')
+  const pnpmFilename = path.join(workingDirectory, 'pnpm-lock.yaml')
+  const usePnpm = fs.existsSync(pnpmFilename)
+  const useYarn = fs.existsSync(yarnFilename)
+  const isEitherUsingYarnOrPnpm = useYarn || usePnpm
+
+  if (usePnpm && useYarn) {
+    throw new Error(
+      'Cannot proceed because both yarn.lock and pnpm-lock.yaml exist. Please remove one of them.'
+    )
+  }
 
   if (!usePackageLock) {
     return {
-      useYarn: false,
+      usePnpm,
+      useYarn,
       lockFilename: packageFilename
     }
   }
 
-  const yarnFilename = path.join(workingDirectory, 'yarn.lock')
-  const useYarn = fs.existsSync(yarnFilename)
-  core.debug(`yarn lock file "${yarnFilename}" exists? ${useYarn}`)
+  if (useYarn)
+    core.debug(`yarn lock file "${yarnFilename}" exists. Using yarn.lock`)
+  if (usePnpm)
+    core.debug(`pnpm lock file "${pnpmFilename}" exists. Using pnpm-lock.yaml`)
 
   const npmShrinkwrapFilename = path.join(
     workingDirectory,
     'npm-shrinkwrap.json'
   )
-  const packageLockFilename = path.join(workingDirectory, 'package-lock.json')
+
+  const npmPackageLockFilename = path.join(
+    workingDirectory,
+    'package-lock.json'
+  )
   const npmFilename =
-    !useYarn && fs.existsSync(npmShrinkwrapFilename)
+    !isEitherUsingYarnOrPnpm && fs.existsSync(npmShrinkwrapFilename)
       ? npmShrinkwrapFilename
-      : packageLockFilename
+      : npmPackageLockFilename
 
   const result = {
+    usePnpm,
     useYarn,
-    lockFilename: useYarn ? yarnFilename : npmFilename
+    lockFilename: isEitherUsingYarnOrPnpm
+      ? iCondThenOtherwise(usePnpm, pnpmFilename, yarnFilename)
+      : npmFilename
   }
   return result
 }
 
 const getCacheParams = ({
+  usePnpm,
   useYarn,
   useRollingCache,
   homeDirectory,
@@ -2972,7 +3120,10 @@ const getCacheParams = ({
   const primaryKeySegments = [platformAndArch]
   let inputPaths, restoreKeys
 
-  if (useYarn) {
+  if (usePnpm) {
+    inputPaths = [path.join(homeDirectory, '.pnpm-store')]
+    primaryKeySegments.unshift('pnpm')
+  } else if (useYarn) {
     inputPaths = [path.join(homeDirectory, '.cache', 'yarn')]
     primaryKeySegments.unshift('yarn')
   } else {
@@ -3023,6 +3174,7 @@ const installInOneFolder = ({
   const NPM_CACHE_FOLDER = path.join(homeDirectory, '.npm')
 
   const NPM_CACHE = getCacheParams({
+    usePnpm: lockInfo.usePnpm,
     useYarn: lockInfo.useYarn,
     homeDirectory,
     useRollingCache,
@@ -3031,6 +3183,7 @@ const installInOneFolder = ({
   })
 
   const opts = {
+    usePnpm: lockInfo.usePnpm,
     useYarn: lockInfo.useYarn,
     usePackageLock,
     workingDirectory,
@@ -3575,7 +3728,7 @@ function uploadChunk(httpClient, resourceUrl, openStream, start, end) {
 function uploadFile(httpClient, cacheId, archivePath, options) {
     return __awaiter(this, void 0, void 0, function* () {
         // Upload Chunks
-        const fileSize = fs.statSync(archivePath).size;
+        const fileSize = utils.getArchiveFileSizeInBytes(archivePath);
         const resourceUrl = getCacheApiUrl(`caches/${cacheId.toString()}`);
         const fd = fs.openSync(archivePath, 'r');
         const uploadOptions = options_1.getUploadOptions(options);
@@ -3625,7 +3778,8 @@ function saveCache(cacheId, archivePath, options) {
         yield uploadFile(httpClient, cacheId, archivePath, options);
         // Commit Cache
         core.debug('Commiting cache');
-        const cacheSize = utils.getArchiveFileSizeIsBytes(archivePath);
+        const cacheSize = utils.getArchiveFileSizeInBytes(archivePath);
+        core.info(`Cache Size: ~${Math.round(cacheSize / (1024 * 1024))} MB (${cacheSize} B)`);
         const commitCacheResponse = yield commitCache(httpClient, cacheId, cacheSize);
         if (!requestUtils_1.isSuccessStatusCode(commitCacheResponse.statusCode)) {
             throw new Error(`Cache service responded with ${commitCacheResponse.statusCode} during commit cache.`);
@@ -4971,7 +5125,7 @@ module.exports = require("https");
 /* 213 */
 /***/ (function(module) {
 
-module.exports = require("punycode");
+module.exports = require("timers");
 
 /***/ }),
 /* 214 */,
@@ -5498,7 +5652,7 @@ function downloadCacheHttpClient(archiveLocation, archivePath) {
         const contentLengthHeader = downloadResponse.message.headers['content-length'];
         if (contentLengthHeader) {
             const expectedLength = parseInt(contentLengthHeader);
-            const actualLength = utils.getArchiveFileSizeIsBytes(archivePath);
+            const actualLength = utils.getArchiveFileSizeInBytes(archivePath);
             if (actualLength !== expectedLength) {
                 throw new Error(`Incomplete download. Expected file size: ${expectedLength}, actual file size: ${actualLength}`);
             }
@@ -8340,12 +8494,7 @@ var SamplingDecision;
 /***/ }),
 /* 341 */,
 /* 342 */,
-/* 343 */
-/***/ (function(module) {
-
-module.exports = require("timers");
-
-/***/ }),
+/* 343 */,
 /* 344 */,
 /* 345 */,
 /* 346 */,
@@ -8535,7 +8684,7 @@ module.exports = require("assert");
 Object.defineProperty(exports, '__esModule', { value: true });
 
 var coreHttp = __webpack_require__(999);
-var tslib = __webpack_require__(815);
+var tslib = __webpack_require__(608);
 var api = __webpack_require__(440);
 var logger$1 = __webpack_require__(928);
 var abortController = __webpack_require__(106);
@@ -33217,7 +33366,7 @@ exports.Path = Path;
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-const punycode = __webpack_require__(213);
+const punycode = __webpack_require__(815);
 const urlParse = __webpack_require__(835).parse;
 const util = __webpack_require__(669);
 const pubsuffix = __webpack_require__(562);
@@ -35683,14 +35832,27 @@ function parallel(list, iterator, callback)
 
 "use strict";
 
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    Object.defineProperty(o, k2, { enumerable: true, get: function() { return m[k]; } });
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
 var __importStar = (this && this.__importStar) || function (mod) {
     if (mod && mod.__esModule) return mod;
     var result = {};
-    if (mod != null) for (var k in mod) if (Object.hasOwnProperty.call(mod, k)) result[k] = mod[k];
-    result["default"] = mod;
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
     return result;
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.issue = exports.issueCommand = void 0;
 const os = __importStar(__webpack_require__(87));
 const utils_1 = __webpack_require__(82);
 /**
@@ -35795,20 +35957,33 @@ const utils = __importStar(__webpack_require__(15));
 const constants_1 = __webpack_require__(931);
 function getTarPath(args, compressionMethod) {
     return __awaiter(this, void 0, void 0, function* () {
-        const IS_WINDOWS = process.platform === 'win32';
-        if (IS_WINDOWS) {
-            const systemTar = `${process.env['windir']}\\System32\\tar.exe`;
-            if (compressionMethod !== constants_1.CompressionMethod.Gzip) {
-                // We only use zstandard compression on windows when gnu tar is installed due to
-                // a bug with compressing large files with bsdtar + zstd
-                args.push('--force-local');
+        switch (process.platform) {
+            case 'win32': {
+                const systemTar = `${process.env['windir']}\\System32\\tar.exe`;
+                if (compressionMethod !== constants_1.CompressionMethod.Gzip) {
+                    // We only use zstandard compression on windows when gnu tar is installed due to
+                    // a bug with compressing large files with bsdtar + zstd
+                    args.push('--force-local');
+                }
+                else if (fs_1.existsSync(systemTar)) {
+                    return systemTar;
+                }
+                else if (yield utils.isGnuTarInstalled()) {
+                    args.push('--force-local');
+                }
+                break;
             }
-            else if (fs_1.existsSync(systemTar)) {
-                return systemTar;
+            case 'darwin': {
+                const gnuTar = yield io.which('gtar', false);
+                if (gnuTar) {
+                    // fix permission denied errors when extracting BSD tar archive with GNU tar - https://github.com/actions/cache/issues/527
+                    args.push('--delay-directory-restore');
+                    return gnuTar;
+                }
+                break;
             }
-            else if (yield utils.isGnuTarInstalled()) {
-                args.push('--force-local');
-            }
+            default:
+                break;
         }
         return yield io.which('tar', true);
     });
@@ -35893,6 +36068,32 @@ function createTar(archiveFolder, sourceDirectories, compressionMethod) {
     });
 }
 exports.createTar = createTar;
+function listTar(archivePath, compressionMethod) {
+    return __awaiter(this, void 0, void 0, function* () {
+        // --d: Decompress.
+        // --long=#: Enables long distance matching with # bits.
+        // Maximum is 30 (1GB) on 32-bit OS and 31 (2GB) on 64-bit.
+        // Using 30 here because we also support 32-bit self-hosted runners.
+        function getCompressionProgram() {
+            switch (compressionMethod) {
+                case constants_1.CompressionMethod.Zstd:
+                    return ['--use-compress-program', 'zstd -d --long=30'];
+                case constants_1.CompressionMethod.ZstdWithoutLong:
+                    return ['--use-compress-program', 'zstd -d'];
+                default:
+                    return ['-z'];
+            }
+        }
+        const args = [
+            ...getCompressionProgram(),
+            '-tf',
+            archivePath.replace(new RegExp(`\\${path.sep}`, 'g'), '/'),
+            '-P'
+        ];
+        yield execTar(args, compressionMethod);
+    });
+}
+exports.listTar = listTar;
 //# sourceMappingURL=tar.js.map
 
 /***/ }),
@@ -38015,6 +38216,25 @@ module.exports = '4.0.0'
 
 "use strict";
 
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    Object.defineProperty(o, k2, { enumerable: true, get: function() { return m[k]; } });
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -38024,19 +38244,14 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
-var __importStar = (this && this.__importStar) || function (mod) {
-    if (mod && mod.__esModule) return mod;
-    var result = {};
-    if (mod != null) for (var k in mod) if (Object.hasOwnProperty.call(mod, k)) result[k] = mod[k];
-    result["default"] = mod;
-    return result;
-};
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.getIDToken = exports.getState = exports.saveState = exports.group = exports.endGroup = exports.startGroup = exports.info = exports.notice = exports.warning = exports.error = exports.debug = exports.isDebug = exports.setFailed = exports.setCommandEcho = exports.setOutput = exports.getBooleanInput = exports.getMultilineInput = exports.getInput = exports.addPath = exports.setSecret = exports.exportVariable = exports.ExitCode = void 0;
 const command_1 = __webpack_require__(431);
 const file_command_1 = __webpack_require__(102);
 const utils_1 = __webpack_require__(82);
 const os = __importStar(__webpack_require__(87));
 const path = __importStar(__webpack_require__(622));
+const oidc_utils_1 = __webpack_require__(742);
 /**
  * The code to exit an action
  */
@@ -38098,7 +38313,9 @@ function addPath(inputPath) {
 }
 exports.addPath = addPath;
 /**
- * Gets the value of an input.  The value is also trimmed.
+ * Gets the value of an input.
+ * Unless trimWhitespace is set to false in InputOptions, the value is also trimmed.
+ * Returns an empty string if the value is not defined.
  *
  * @param     name     name of the input to get
  * @param     options  optional. See InputOptions.
@@ -38109,9 +38326,49 @@ function getInput(name, options) {
     if (options && options.required && !val) {
         throw new Error(`Input required and not supplied: ${name}`);
     }
+    if (options && options.trimWhitespace === false) {
+        return val;
+    }
     return val.trim();
 }
 exports.getInput = getInput;
+/**
+ * Gets the values of an multiline input.  Each value is also trimmed.
+ *
+ * @param     name     name of the input to get
+ * @param     options  optional. See InputOptions.
+ * @returns   string[]
+ *
+ */
+function getMultilineInput(name, options) {
+    const inputs = getInput(name, options)
+        .split('\n')
+        .filter(x => x !== '');
+    return inputs;
+}
+exports.getMultilineInput = getMultilineInput;
+/**
+ * Gets the input value of the boolean type in the YAML 1.2 "core schema" specification.
+ * Support boolean input list: `true | True | TRUE | false | False | FALSE` .
+ * The return value is also in boolean type.
+ * ref: https://yaml.org/spec/1.2/spec.html#id2804923
+ *
+ * @param     name     name of the input to get
+ * @param     options  optional. See InputOptions.
+ * @returns   boolean
+ */
+function getBooleanInput(name, options) {
+    const trueValue = ['true', 'True', 'TRUE'];
+    const falseValue = ['false', 'False', 'FALSE'];
+    const val = getInput(name, options);
+    if (trueValue.includes(val))
+        return true;
+    if (falseValue.includes(val))
+        return false;
+    throw new TypeError(`Input does not meet YAML 1.2 "Core Schema" specification: ${name}\n` +
+        `Support boolean input list: \`true | True | TRUE | false | False | FALSE\``);
+}
+exports.getBooleanInput = getBooleanInput;
 /**
  * Sets the value of an output.
  *
@@ -38120,6 +38377,7 @@ exports.getInput = getInput;
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function setOutput(name, value) {
+    process.stdout.write(os.EOL);
     command_1.issueCommand('set-output', { name }, value);
 }
 exports.setOutput = setOutput;
@@ -38166,19 +38424,30 @@ exports.debug = debug;
 /**
  * Adds an error issue
  * @param message error issue message. Errors will be converted to string via toString()
+ * @param properties optional properties to add to the annotation.
  */
-function error(message) {
-    command_1.issue('error', message instanceof Error ? message.toString() : message);
+function error(message, properties = {}) {
+    command_1.issueCommand('error', utils_1.toCommandProperties(properties), message instanceof Error ? message.toString() : message);
 }
 exports.error = error;
 /**
- * Adds an warning issue
+ * Adds a warning issue
  * @param message warning issue message. Errors will be converted to string via toString()
+ * @param properties optional properties to add to the annotation.
  */
-function warning(message) {
-    command_1.issue('warning', message instanceof Error ? message.toString() : message);
+function warning(message, properties = {}) {
+    command_1.issueCommand('warning', utils_1.toCommandProperties(properties), message instanceof Error ? message.toString() : message);
 }
 exports.warning = warning;
+/**
+ * Adds a notice issue
+ * @param message notice issue message. Errors will be converted to string via toString()
+ * @param properties optional properties to add to the annotation.
+ */
+function notice(message, properties = {}) {
+    command_1.issueCommand('notice', utils_1.toCommandProperties(properties), message instanceof Error ? message.toString() : message);
+}
+exports.notice = notice;
 /**
  * Writes info to log with console.log.
  * @param message info message
@@ -38251,6 +38520,12 @@ function getState(name) {
     return process.env[`STATE_${name}`] || '';
 }
 exports.getState = getState;
+function getIDToken(aud) {
+    return __awaiter(this, void 0, void 0, function* () {
+        return yield oidc_utils_1.OidcClient.getIDToken(aud);
+    });
+}
+exports.getIDToken = getIDToken;
 //# sourceMappingURL=core.js.map
 
 /***/ }),
@@ -39299,7 +39574,9 @@ class HttpClient {
                 maxSockets: maxSockets,
                 keepAlive: this._keepAlive,
                 proxy: {
-                    proxyAuth: `${proxyUrl.username}:${proxyUrl.password}`,
+                    ...((proxyUrl.username || proxyUrl.password) && {
+                        proxyAuth: `${proxyUrl.username}:${proxyUrl.password}`
+                    }),
                     host: proxyUrl.hostname,
                     port: proxyUrl.port
                 }
@@ -40723,7 +41000,304 @@ Object.defineProperty(exports, "__esModule", { value: true });
 //# sourceMappingURL=span_context.js.map
 
 /***/ }),
-/* 608 */,
+/* 608 */
+/***/ (function(module) {
+
+/*! *****************************************************************************
+Copyright (c) Microsoft Corporation.
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.
+***************************************************************************** */
+/* global global, define, System, Reflect, Promise */
+var __extends;
+var __assign;
+var __rest;
+var __decorate;
+var __param;
+var __metadata;
+var __awaiter;
+var __generator;
+var __exportStar;
+var __values;
+var __read;
+var __spread;
+var __spreadArrays;
+var __await;
+var __asyncGenerator;
+var __asyncDelegator;
+var __asyncValues;
+var __makeTemplateObject;
+var __importStar;
+var __importDefault;
+var __classPrivateFieldGet;
+var __classPrivateFieldSet;
+var __createBinding;
+(function (factory) {
+    var root = typeof global === "object" ? global : typeof self === "object" ? self : typeof this === "object" ? this : {};
+    if (typeof define === "function" && define.amd) {
+        define("tslib", ["exports"], function (exports) { factory(createExporter(root, createExporter(exports))); });
+    }
+    else if ( true && typeof module.exports === "object") {
+        factory(createExporter(root, createExporter(module.exports)));
+    }
+    else {
+        factory(createExporter(root));
+    }
+    function createExporter(exports, previous) {
+        if (exports !== root) {
+            if (typeof Object.create === "function") {
+                Object.defineProperty(exports, "__esModule", { value: true });
+            }
+            else {
+                exports.__esModule = true;
+            }
+        }
+        return function (id, v) { return exports[id] = previous ? previous(id, v) : v; };
+    }
+})
+(function (exporter) {
+    var extendStatics = Object.setPrototypeOf ||
+        ({ __proto__: [] } instanceof Array && function (d, b) { d.__proto__ = b; }) ||
+        function (d, b) { for (var p in b) if (Object.prototype.hasOwnProperty.call(b, p)) d[p] = b[p]; };
+
+    __extends = function (d, b) {
+        extendStatics(d, b);
+        function __() { this.constructor = d; }
+        d.prototype = b === null ? Object.create(b) : (__.prototype = b.prototype, new __());
+    };
+
+    __assign = Object.assign || function (t) {
+        for (var s, i = 1, n = arguments.length; i < n; i++) {
+            s = arguments[i];
+            for (var p in s) if (Object.prototype.hasOwnProperty.call(s, p)) t[p] = s[p];
+        }
+        return t;
+    };
+
+    __rest = function (s, e) {
+        var t = {};
+        for (var p in s) if (Object.prototype.hasOwnProperty.call(s, p) && e.indexOf(p) < 0)
+            t[p] = s[p];
+        if (s != null && typeof Object.getOwnPropertySymbols === "function")
+            for (var i = 0, p = Object.getOwnPropertySymbols(s); i < p.length; i++) {
+                if (e.indexOf(p[i]) < 0 && Object.prototype.propertyIsEnumerable.call(s, p[i]))
+                    t[p[i]] = s[p[i]];
+            }
+        return t;
+    };
+
+    __decorate = function (decorators, target, key, desc) {
+        var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
+        if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
+        else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
+        return c > 3 && r && Object.defineProperty(target, key, r), r;
+    };
+
+    __param = function (paramIndex, decorator) {
+        return function (target, key) { decorator(target, key, paramIndex); }
+    };
+
+    __metadata = function (metadataKey, metadataValue) {
+        if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(metadataKey, metadataValue);
+    };
+
+    __awaiter = function (thisArg, _arguments, P, generator) {
+        function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+        return new (P || (P = Promise))(function (resolve, reject) {
+            function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+            function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+            function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+            step((generator = generator.apply(thisArg, _arguments || [])).next());
+        });
+    };
+
+    __generator = function (thisArg, body) {
+        var _ = { label: 0, sent: function() { if (t[0] & 1) throw t[1]; return t[1]; }, trys: [], ops: [] }, f, y, t, g;
+        return g = { next: verb(0), "throw": verb(1), "return": verb(2) }, typeof Symbol === "function" && (g[Symbol.iterator] = function() { return this; }), g;
+        function verb(n) { return function (v) { return step([n, v]); }; }
+        function step(op) {
+            if (f) throw new TypeError("Generator is already executing.");
+            while (_) try {
+                if (f = 1, y && (t = op[0] & 2 ? y["return"] : op[0] ? y["throw"] || ((t = y["return"]) && t.call(y), 0) : y.next) && !(t = t.call(y, op[1])).done) return t;
+                if (y = 0, t) op = [op[0] & 2, t.value];
+                switch (op[0]) {
+                    case 0: case 1: t = op; break;
+                    case 4: _.label++; return { value: op[1], done: false };
+                    case 5: _.label++; y = op[1]; op = [0]; continue;
+                    case 7: op = _.ops.pop(); _.trys.pop(); continue;
+                    default:
+                        if (!(t = _.trys, t = t.length > 0 && t[t.length - 1]) && (op[0] === 6 || op[0] === 2)) { _ = 0; continue; }
+                        if (op[0] === 3 && (!t || (op[1] > t[0] && op[1] < t[3]))) { _.label = op[1]; break; }
+                        if (op[0] === 6 && _.label < t[1]) { _.label = t[1]; t = op; break; }
+                        if (t && _.label < t[2]) { _.label = t[2]; _.ops.push(op); break; }
+                        if (t[2]) _.ops.pop();
+                        _.trys.pop(); continue;
+                }
+                op = body.call(thisArg, _);
+            } catch (e) { op = [6, e]; y = 0; } finally { f = t = 0; }
+            if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
+        }
+    };
+
+    __exportStar = function(m, o) {
+        for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(o, p)) __createBinding(o, m, p);
+    };
+
+    __createBinding = Object.create ? (function(o, m, k, k2) {
+        if (k2 === undefined) k2 = k;
+        Object.defineProperty(o, k2, { enumerable: true, get: function() { return m[k]; } });
+    }) : (function(o, m, k, k2) {
+        if (k2 === undefined) k2 = k;
+        o[k2] = m[k];
+    });
+
+    __values = function (o) {
+        var s = typeof Symbol === "function" && Symbol.iterator, m = s && o[s], i = 0;
+        if (m) return m.call(o);
+        if (o && typeof o.length === "number") return {
+            next: function () {
+                if (o && i >= o.length) o = void 0;
+                return { value: o && o[i++], done: !o };
+            }
+        };
+        throw new TypeError(s ? "Object is not iterable." : "Symbol.iterator is not defined.");
+    };
+
+    __read = function (o, n) {
+        var m = typeof Symbol === "function" && o[Symbol.iterator];
+        if (!m) return o;
+        var i = m.call(o), r, ar = [], e;
+        try {
+            while ((n === void 0 || n-- > 0) && !(r = i.next()).done) ar.push(r.value);
+        }
+        catch (error) { e = { error: error }; }
+        finally {
+            try {
+                if (r && !r.done && (m = i["return"])) m.call(i);
+            }
+            finally { if (e) throw e.error; }
+        }
+        return ar;
+    };
+
+    __spread = function () {
+        for (var ar = [], i = 0; i < arguments.length; i++)
+            ar = ar.concat(__read(arguments[i]));
+        return ar;
+    };
+
+    __spreadArrays = function () {
+        for (var s = 0, i = 0, il = arguments.length; i < il; i++) s += arguments[i].length;
+        for (var r = Array(s), k = 0, i = 0; i < il; i++)
+            for (var a = arguments[i], j = 0, jl = a.length; j < jl; j++, k++)
+                r[k] = a[j];
+        return r;
+    };
+
+    __await = function (v) {
+        return this instanceof __await ? (this.v = v, this) : new __await(v);
+    };
+
+    __asyncGenerator = function (thisArg, _arguments, generator) {
+        if (!Symbol.asyncIterator) throw new TypeError("Symbol.asyncIterator is not defined.");
+        var g = generator.apply(thisArg, _arguments || []), i, q = [];
+        return i = {}, verb("next"), verb("throw"), verb("return"), i[Symbol.asyncIterator] = function () { return this; }, i;
+        function verb(n) { if (g[n]) i[n] = function (v) { return new Promise(function (a, b) { q.push([n, v, a, b]) > 1 || resume(n, v); }); }; }
+        function resume(n, v) { try { step(g[n](v)); } catch (e) { settle(q[0][3], e); } }
+        function step(r) { r.value instanceof __await ? Promise.resolve(r.value.v).then(fulfill, reject) : settle(q[0][2], r);  }
+        function fulfill(value) { resume("next", value); }
+        function reject(value) { resume("throw", value); }
+        function settle(f, v) { if (f(v), q.shift(), q.length) resume(q[0][0], q[0][1]); }
+    };
+
+    __asyncDelegator = function (o) {
+        var i, p;
+        return i = {}, verb("next"), verb("throw", function (e) { throw e; }), verb("return"), i[Symbol.iterator] = function () { return this; }, i;
+        function verb(n, f) { i[n] = o[n] ? function (v) { return (p = !p) ? { value: __await(o[n](v)), done: n === "return" } : f ? f(v) : v; } : f; }
+    };
+
+    __asyncValues = function (o) {
+        if (!Symbol.asyncIterator) throw new TypeError("Symbol.asyncIterator is not defined.");
+        var m = o[Symbol.asyncIterator], i;
+        return m ? m.call(o) : (o = typeof __values === "function" ? __values(o) : o[Symbol.iterator](), i = {}, verb("next"), verb("throw"), verb("return"), i[Symbol.asyncIterator] = function () { return this; }, i);
+        function verb(n) { i[n] = o[n] && function (v) { return new Promise(function (resolve, reject) { v = o[n](v), settle(resolve, reject, v.done, v.value); }); }; }
+        function settle(resolve, reject, d, v) { Promise.resolve(v).then(function(v) { resolve({ value: v, done: d }); }, reject); }
+    };
+
+    __makeTemplateObject = function (cooked, raw) {
+        if (Object.defineProperty) { Object.defineProperty(cooked, "raw", { value: raw }); } else { cooked.raw = raw; }
+        return cooked;
+    };
+
+    var __setModuleDefault = Object.create ? (function(o, v) {
+        Object.defineProperty(o, "default", { enumerable: true, value: v });
+    }) : function(o, v) {
+        o["default"] = v;
+    };
+
+    __importStar = function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+
+    __importDefault = function (mod) {
+        return (mod && mod.__esModule) ? mod : { "default": mod };
+    };
+
+    __classPrivateFieldGet = function (receiver, privateMap) {
+        if (!privateMap.has(receiver)) {
+            throw new TypeError("attempted to get private field on non-instance");
+        }
+        return privateMap.get(receiver);
+    };
+
+    __classPrivateFieldSet = function (receiver, privateMap, value) {
+        if (!privateMap.has(receiver)) {
+            throw new TypeError("attempted to set private field on non-instance");
+        }
+        privateMap.set(receiver, value);
+        return value;
+    };
+
+    exporter("__extends", __extends);
+    exporter("__assign", __assign);
+    exporter("__rest", __rest);
+    exporter("__decorate", __decorate);
+    exporter("__param", __param);
+    exporter("__metadata", __metadata);
+    exporter("__awaiter", __awaiter);
+    exporter("__generator", __generator);
+    exporter("__exportStar", __exportStar);
+    exporter("__createBinding", __createBinding);
+    exporter("__values", __values);
+    exporter("__read", __read);
+    exporter("__spread", __spread);
+    exporter("__spreadArrays", __spreadArrays);
+    exporter("__await", __await);
+    exporter("__asyncGenerator", __asyncGenerator);
+    exporter("__asyncDelegator", __asyncDelegator);
+    exporter("__asyncValues", __asyncValues);
+    exporter("__makeTemplateObject", __makeTemplateObject);
+    exporter("__importStar", __importStar);
+    exporter("__importDefault", __importDefault);
+    exporter("__classPrivateFieldGet", __classPrivateFieldGet);
+    exporter("__classPrivateFieldSet", __classPrivateFieldSet);
+});
+
+
+/***/ }),
 /* 609 */,
 /* 610 */,
 /* 611 */,
@@ -43021,6 +43595,25 @@ var SpanKind;
 
 "use strict";
 
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    Object.defineProperty(o, k2, { enumerable: true, get: function() { return m[k]; } });
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -43032,9 +43625,9 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
 };
 var _a;
 Object.defineProperty(exports, "__esModule", { value: true });
-const assert_1 = __webpack_require__(357);
-const fs = __webpack_require__(747);
-const path = __webpack_require__(622);
+exports.getCmdPath = exports.tryGetExecutablePath = exports.isRooted = exports.isDirectory = exports.exists = exports.IS_WINDOWS = exports.unlink = exports.symlink = exports.stat = exports.rmdir = exports.rename = exports.readlink = exports.readdir = exports.mkdir = exports.lstat = exports.copyFile = exports.chmod = void 0;
+const fs = __importStar(__webpack_require__(747));
+const path = __importStar(__webpack_require__(622));
 _a = fs.promises, exports.chmod = _a.chmod, exports.copyFile = _a.copyFile, exports.lstat = _a.lstat, exports.mkdir = _a.mkdir, exports.readdir = _a.readdir, exports.readlink = _a.readlink, exports.rename = _a.rename, exports.rmdir = _a.rmdir, exports.stat = _a.stat, exports.symlink = _a.symlink, exports.unlink = _a.unlink;
 exports.IS_WINDOWS = process.platform === 'win32';
 function exists(fsPath) {
@@ -43075,49 +43668,6 @@ function isRooted(p) {
     return p.startsWith('/');
 }
 exports.isRooted = isRooted;
-/**
- * Recursively create a directory at `fsPath`.
- *
- * This implementation is optimistic, meaning it attempts to create the full
- * path first, and backs up the path stack from there.
- *
- * @param fsPath The path to create
- * @param maxDepth The maximum recursion depth
- * @param depth The current recursion depth
- */
-function mkdirP(fsPath, maxDepth = 1000, depth = 1) {
-    return __awaiter(this, void 0, void 0, function* () {
-        assert_1.ok(fsPath, 'a path argument must be provided');
-        fsPath = path.resolve(fsPath);
-        if (depth >= maxDepth)
-            return exports.mkdir(fsPath);
-        try {
-            yield exports.mkdir(fsPath);
-            return;
-        }
-        catch (err) {
-            switch (err.code) {
-                case 'ENOENT': {
-                    yield mkdirP(path.dirname(fsPath), maxDepth, depth + 1);
-                    yield exports.mkdir(fsPath);
-                    return;
-                }
-                default: {
-                    let stats;
-                    try {
-                        stats = yield exports.stat(fsPath);
-                    }
-                    catch (err2) {
-                        throw err;
-                    }
-                    if (!stats.isDirectory())
-                        throw err;
-                }
-            }
-        }
-    });
-}
-exports.mkdirP = mkdirP;
 /**
  * Best effort attempt to determine whether a file exists and is executable.
  * @param filePath    file path to check
@@ -43214,6 +43764,12 @@ function isUnixExecutable(stats) {
         ((stats.mode & 8) > 0 && stats.gid === process.getgid()) ||
         ((stats.mode & 64) > 0 && stats.uid === process.getuid()));
 }
+// Get the path of cmd.exe in windows
+function getCmdPath() {
+    var _a;
+    return (_a = process.env['COMSPEC']) !== null && _a !== void 0 ? _a : `cmd.exe`;
+}
+exports.getCmdPath = getCmdPath;
 //# sourceMappingURL=io-util.js.map
 
 /***/ }),
@@ -43405,9 +43961,13 @@ function restoreCache(paths, primaryKey, restoreKeys, options) {
         try {
             // Download the cache from the cache entry
             yield cacheHttpClient.downloadCache(cacheEntry.archiveLocation, archivePath, options);
-            const archiveFileSize = utils.getArchiveFileSizeIsBytes(archivePath);
+            if (core.isDebug()) {
+                yield tar_1.listTar(archivePath, compressionMethod);
+            }
+            const archiveFileSize = utils.getArchiveFileSizeInBytes(archivePath);
             core.info(`Cache Size: ~${Math.round(archiveFileSize / (1024 * 1024))} MB (${archiveFileSize} B)`);
             yield tar_1.extractTar(archivePath, compressionMethod);
+            core.info('Cache restored successfully');
         }
         finally {
             // Try to delete the archive to save space
@@ -43449,15 +44009,29 @@ function saveCache(paths, key, options) {
         const archiveFolder = yield utils.createTempDirectory();
         const archivePath = path.join(archiveFolder, utils.getCacheFileName(compressionMethod));
         core.debug(`Archive Path: ${archivePath}`);
-        yield tar_1.createTar(archiveFolder, cachePaths, compressionMethod);
-        const fileSizeLimit = 5 * 1024 * 1024 * 1024; // 5GB per repo limit
-        const archiveFileSize = utils.getArchiveFileSizeIsBytes(archivePath);
-        core.debug(`File Size: ${archiveFileSize}`);
-        if (archiveFileSize > fileSizeLimit) {
-            throw new Error(`Cache size of ~${Math.round(archiveFileSize / (1024 * 1024))} MB (${archiveFileSize} B) is over the 5GB limit, not saving cache.`);
+        try {
+            yield tar_1.createTar(archiveFolder, cachePaths, compressionMethod);
+            if (core.isDebug()) {
+                yield tar_1.listTar(archivePath, compressionMethod);
+            }
+            const fileSizeLimit = 10 * 1024 * 1024 * 1024; // 10GB per repo limit
+            const archiveFileSize = utils.getArchiveFileSizeInBytes(archivePath);
+            core.debug(`File Size: ${archiveFileSize}`);
+            if (archiveFileSize > fileSizeLimit) {
+                throw new Error(`Cache size of ~${Math.round(archiveFileSize / (1024 * 1024))} MB (${archiveFileSize} B) is over the 10GB limit, not saving cache.`);
+            }
+            core.debug(`Saving Cache (ID: ${cacheId})`);
+            yield cacheHttpClient.saveCache(cacheId, archivePath, options);
         }
-        core.debug(`Saving Cache (ID: ${cacheId})`);
-        yield cacheHttpClient.saveCache(cacheId, archivePath, options);
+        finally {
+            // Try to delete the archive to save space
+            try {
+                yield utils.unlinkFile(archivePath);
+            }
+            catch (error) {
+                core.debug(`Failed to delete archive: ${error}`);
+            }
+        }
         return cacheId;
     });
 }
@@ -44095,7 +44669,89 @@ function rng() {
 /* 739 */,
 /* 740 */,
 /* 741 */,
-/* 742 */,
+/* 742 */
+/***/ (function(__unusedmodule, exports, __webpack_require__) {
+
+"use strict";
+
+var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.OidcClient = void 0;
+const http_client_1 = __webpack_require__(539);
+const auth_1 = __webpack_require__(226);
+const core_1 = __webpack_require__(470);
+class OidcClient {
+    static createHttpClient(allowRetry = true, maxRetry = 10) {
+        const requestOptions = {
+            allowRetries: allowRetry,
+            maxRetries: maxRetry
+        };
+        return new http_client_1.HttpClient('actions/oidc-client', [new auth_1.BearerCredentialHandler(OidcClient.getRequestToken())], requestOptions);
+    }
+    static getRequestToken() {
+        const token = process.env['ACTIONS_ID_TOKEN_REQUEST_TOKEN'];
+        if (!token) {
+            throw new Error('Unable to get ACTIONS_ID_TOKEN_REQUEST_TOKEN env variable');
+        }
+        return token;
+    }
+    static getIDTokenUrl() {
+        const runtimeUrl = process.env['ACTIONS_ID_TOKEN_REQUEST_URL'];
+        if (!runtimeUrl) {
+            throw new Error('Unable to get ACTIONS_ID_TOKEN_REQUEST_URL env variable');
+        }
+        return runtimeUrl;
+    }
+    static getCall(id_token_url) {
+        var _a;
+        return __awaiter(this, void 0, void 0, function* () {
+            const httpclient = OidcClient.createHttpClient();
+            const res = yield httpclient
+                .getJson(id_token_url)
+                .catch(error => {
+                throw new Error(`Failed to get ID Token. \n 
+        Error Code : ${error.statusCode}\n 
+        Error Message: ${error.result.message}`);
+            });
+            const id_token = (_a = res.result) === null || _a === void 0 ? void 0 : _a.value;
+            if (!id_token) {
+                throw new Error('Response json body do not have ID Token field');
+            }
+            return id_token;
+        });
+    }
+    static getIDToken(audience) {
+        return __awaiter(this, void 0, void 0, function* () {
+            try {
+                // New ID Token is requested from action service
+                let id_token_url = OidcClient.getIDTokenUrl();
+                if (audience) {
+                    const encodedAudience = encodeURIComponent(audience);
+                    id_token_url = `${id_token_url}&audience=${encodedAudience}`;
+                }
+                core_1.debug(`ID token url is ${id_token_url}`);
+                const id_token = yield OidcClient.getCall(id_token_url);
+                core_1.setSecret(id_token);
+                return id_token;
+            }
+            catch (error) {
+                throw new Error(`Error message: ${error.message}`);
+            }
+        });
+    }
+}
+exports.OidcClient = OidcClient;
+//# sourceMappingURL=oidc-utils.js.map
+
+/***/ }),
 /* 743 */,
 /* 744 */
 /***/ (function(__unusedmodule, exports) {
@@ -44156,7 +44812,7 @@ module.exports = require("fs");
 
 
 
-var Punycode = __webpack_require__(213);
+var Punycode = __webpack_require__(815);
 
 
 var internals = {};
@@ -46388,299 +47044,7 @@ module.exports = require("stream");
 /* 815 */
 /***/ (function(module) {
 
-/*! *****************************************************************************
-Copyright (c) Microsoft Corporation.
-
-Permission to use, copy, modify, and/or distribute this software for any
-purpose with or without fee is hereby granted.
-
-THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
-REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
-AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
-INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
-LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
-OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
-PERFORMANCE OF THIS SOFTWARE.
-***************************************************************************** */
-/* global global, define, System, Reflect, Promise */
-var __extends;
-var __assign;
-var __rest;
-var __decorate;
-var __param;
-var __metadata;
-var __awaiter;
-var __generator;
-var __exportStar;
-var __values;
-var __read;
-var __spread;
-var __spreadArrays;
-var __await;
-var __asyncGenerator;
-var __asyncDelegator;
-var __asyncValues;
-var __makeTemplateObject;
-var __importStar;
-var __importDefault;
-var __classPrivateFieldGet;
-var __classPrivateFieldSet;
-var __createBinding;
-(function (factory) {
-    var root = typeof global === "object" ? global : typeof self === "object" ? self : typeof this === "object" ? this : {};
-    if (typeof define === "function" && define.amd) {
-        define("tslib", ["exports"], function (exports) { factory(createExporter(root, createExporter(exports))); });
-    }
-    else if ( true && typeof module.exports === "object") {
-        factory(createExporter(root, createExporter(module.exports)));
-    }
-    else {
-        factory(createExporter(root));
-    }
-    function createExporter(exports, previous) {
-        if (exports !== root) {
-            if (typeof Object.create === "function") {
-                Object.defineProperty(exports, "__esModule", { value: true });
-            }
-            else {
-                exports.__esModule = true;
-            }
-        }
-        return function (id, v) { return exports[id] = previous ? previous(id, v) : v; };
-    }
-})
-(function (exporter) {
-    var extendStatics = Object.setPrototypeOf ||
-        ({ __proto__: [] } instanceof Array && function (d, b) { d.__proto__ = b; }) ||
-        function (d, b) { for (var p in b) if (Object.prototype.hasOwnProperty.call(b, p)) d[p] = b[p]; };
-
-    __extends = function (d, b) {
-        extendStatics(d, b);
-        function __() { this.constructor = d; }
-        d.prototype = b === null ? Object.create(b) : (__.prototype = b.prototype, new __());
-    };
-
-    __assign = Object.assign || function (t) {
-        for (var s, i = 1, n = arguments.length; i < n; i++) {
-            s = arguments[i];
-            for (var p in s) if (Object.prototype.hasOwnProperty.call(s, p)) t[p] = s[p];
-        }
-        return t;
-    };
-
-    __rest = function (s, e) {
-        var t = {};
-        for (var p in s) if (Object.prototype.hasOwnProperty.call(s, p) && e.indexOf(p) < 0)
-            t[p] = s[p];
-        if (s != null && typeof Object.getOwnPropertySymbols === "function")
-            for (var i = 0, p = Object.getOwnPropertySymbols(s); i < p.length; i++) {
-                if (e.indexOf(p[i]) < 0 && Object.prototype.propertyIsEnumerable.call(s, p[i]))
-                    t[p[i]] = s[p[i]];
-            }
-        return t;
-    };
-
-    __decorate = function (decorators, target, key, desc) {
-        var c = arguments.length, r = c < 3 ? target : desc === null ? desc = Object.getOwnPropertyDescriptor(target, key) : desc, d;
-        if (typeof Reflect === "object" && typeof Reflect.decorate === "function") r = Reflect.decorate(decorators, target, key, desc);
-        else for (var i = decorators.length - 1; i >= 0; i--) if (d = decorators[i]) r = (c < 3 ? d(r) : c > 3 ? d(target, key, r) : d(target, key)) || r;
-        return c > 3 && r && Object.defineProperty(target, key, r), r;
-    };
-
-    __param = function (paramIndex, decorator) {
-        return function (target, key) { decorator(target, key, paramIndex); }
-    };
-
-    __metadata = function (metadataKey, metadataValue) {
-        if (typeof Reflect === "object" && typeof Reflect.metadata === "function") return Reflect.metadata(metadataKey, metadataValue);
-    };
-
-    __awaiter = function (thisArg, _arguments, P, generator) {
-        function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
-        return new (P || (P = Promise))(function (resolve, reject) {
-            function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
-            function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
-            function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
-            step((generator = generator.apply(thisArg, _arguments || [])).next());
-        });
-    };
-
-    __generator = function (thisArg, body) {
-        var _ = { label: 0, sent: function() { if (t[0] & 1) throw t[1]; return t[1]; }, trys: [], ops: [] }, f, y, t, g;
-        return g = { next: verb(0), "throw": verb(1), "return": verb(2) }, typeof Symbol === "function" && (g[Symbol.iterator] = function() { return this; }), g;
-        function verb(n) { return function (v) { return step([n, v]); }; }
-        function step(op) {
-            if (f) throw new TypeError("Generator is already executing.");
-            while (_) try {
-                if (f = 1, y && (t = op[0] & 2 ? y["return"] : op[0] ? y["throw"] || ((t = y["return"]) && t.call(y), 0) : y.next) && !(t = t.call(y, op[1])).done) return t;
-                if (y = 0, t) op = [op[0] & 2, t.value];
-                switch (op[0]) {
-                    case 0: case 1: t = op; break;
-                    case 4: _.label++; return { value: op[1], done: false };
-                    case 5: _.label++; y = op[1]; op = [0]; continue;
-                    case 7: op = _.ops.pop(); _.trys.pop(); continue;
-                    default:
-                        if (!(t = _.trys, t = t.length > 0 && t[t.length - 1]) && (op[0] === 6 || op[0] === 2)) { _ = 0; continue; }
-                        if (op[0] === 3 && (!t || (op[1] > t[0] && op[1] < t[3]))) { _.label = op[1]; break; }
-                        if (op[0] === 6 && _.label < t[1]) { _.label = t[1]; t = op; break; }
-                        if (t && _.label < t[2]) { _.label = t[2]; _.ops.push(op); break; }
-                        if (t[2]) _.ops.pop();
-                        _.trys.pop(); continue;
-                }
-                op = body.call(thisArg, _);
-            } catch (e) { op = [6, e]; y = 0; } finally { f = t = 0; }
-            if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
-        }
-    };
-
-    __exportStar = function(m, o) {
-        for (var p in m) if (p !== "default" && !Object.prototype.hasOwnProperty.call(o, p)) __createBinding(o, m, p);
-    };
-
-    __createBinding = Object.create ? (function(o, m, k, k2) {
-        if (k2 === undefined) k2 = k;
-        Object.defineProperty(o, k2, { enumerable: true, get: function() { return m[k]; } });
-    }) : (function(o, m, k, k2) {
-        if (k2 === undefined) k2 = k;
-        o[k2] = m[k];
-    });
-
-    __values = function (o) {
-        var s = typeof Symbol === "function" && Symbol.iterator, m = s && o[s], i = 0;
-        if (m) return m.call(o);
-        if (o && typeof o.length === "number") return {
-            next: function () {
-                if (o && i >= o.length) o = void 0;
-                return { value: o && o[i++], done: !o };
-            }
-        };
-        throw new TypeError(s ? "Object is not iterable." : "Symbol.iterator is not defined.");
-    };
-
-    __read = function (o, n) {
-        var m = typeof Symbol === "function" && o[Symbol.iterator];
-        if (!m) return o;
-        var i = m.call(o), r, ar = [], e;
-        try {
-            while ((n === void 0 || n-- > 0) && !(r = i.next()).done) ar.push(r.value);
-        }
-        catch (error) { e = { error: error }; }
-        finally {
-            try {
-                if (r && !r.done && (m = i["return"])) m.call(i);
-            }
-            finally { if (e) throw e.error; }
-        }
-        return ar;
-    };
-
-    __spread = function () {
-        for (var ar = [], i = 0; i < arguments.length; i++)
-            ar = ar.concat(__read(arguments[i]));
-        return ar;
-    };
-
-    __spreadArrays = function () {
-        for (var s = 0, i = 0, il = arguments.length; i < il; i++) s += arguments[i].length;
-        for (var r = Array(s), k = 0, i = 0; i < il; i++)
-            for (var a = arguments[i], j = 0, jl = a.length; j < jl; j++, k++)
-                r[k] = a[j];
-        return r;
-    };
-
-    __await = function (v) {
-        return this instanceof __await ? (this.v = v, this) : new __await(v);
-    };
-
-    __asyncGenerator = function (thisArg, _arguments, generator) {
-        if (!Symbol.asyncIterator) throw new TypeError("Symbol.asyncIterator is not defined.");
-        var g = generator.apply(thisArg, _arguments || []), i, q = [];
-        return i = {}, verb("next"), verb("throw"), verb("return"), i[Symbol.asyncIterator] = function () { return this; }, i;
-        function verb(n) { if (g[n]) i[n] = function (v) { return new Promise(function (a, b) { q.push([n, v, a, b]) > 1 || resume(n, v); }); }; }
-        function resume(n, v) { try { step(g[n](v)); } catch (e) { settle(q[0][3], e); } }
-        function step(r) { r.value instanceof __await ? Promise.resolve(r.value.v).then(fulfill, reject) : settle(q[0][2], r);  }
-        function fulfill(value) { resume("next", value); }
-        function reject(value) { resume("throw", value); }
-        function settle(f, v) { if (f(v), q.shift(), q.length) resume(q[0][0], q[0][1]); }
-    };
-
-    __asyncDelegator = function (o) {
-        var i, p;
-        return i = {}, verb("next"), verb("throw", function (e) { throw e; }), verb("return"), i[Symbol.iterator] = function () { return this; }, i;
-        function verb(n, f) { i[n] = o[n] ? function (v) { return (p = !p) ? { value: __await(o[n](v)), done: n === "return" } : f ? f(v) : v; } : f; }
-    };
-
-    __asyncValues = function (o) {
-        if (!Symbol.asyncIterator) throw new TypeError("Symbol.asyncIterator is not defined.");
-        var m = o[Symbol.asyncIterator], i;
-        return m ? m.call(o) : (o = typeof __values === "function" ? __values(o) : o[Symbol.iterator](), i = {}, verb("next"), verb("throw"), verb("return"), i[Symbol.asyncIterator] = function () { return this; }, i);
-        function verb(n) { i[n] = o[n] && function (v) { return new Promise(function (resolve, reject) { v = o[n](v), settle(resolve, reject, v.done, v.value); }); }; }
-        function settle(resolve, reject, d, v) { Promise.resolve(v).then(function(v) { resolve({ value: v, done: d }); }, reject); }
-    };
-
-    __makeTemplateObject = function (cooked, raw) {
-        if (Object.defineProperty) { Object.defineProperty(cooked, "raw", { value: raw }); } else { cooked.raw = raw; }
-        return cooked;
-    };
-
-    var __setModuleDefault = Object.create ? (function(o, v) {
-        Object.defineProperty(o, "default", { enumerable: true, value: v });
-    }) : function(o, v) {
-        o["default"] = v;
-    };
-
-    __importStar = function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k in mod) if (k !== "default" && Object.prototype.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-
-    __importDefault = function (mod) {
-        return (mod && mod.__esModule) ? mod : { "default": mod };
-    };
-
-    __classPrivateFieldGet = function (receiver, privateMap) {
-        if (!privateMap.has(receiver)) {
-            throw new TypeError("attempted to get private field on non-instance");
-        }
-        return privateMap.get(receiver);
-    };
-
-    __classPrivateFieldSet = function (receiver, privateMap, value) {
-        if (!privateMap.has(receiver)) {
-            throw new TypeError("attempted to set private field on non-instance");
-        }
-        privateMap.set(receiver, value);
-        return value;
-    };
-
-    exporter("__extends", __extends);
-    exporter("__assign", __assign);
-    exporter("__rest", __rest);
-    exporter("__decorate", __decorate);
-    exporter("__param", __param);
-    exporter("__metadata", __metadata);
-    exporter("__awaiter", __awaiter);
-    exporter("__generator", __generator);
-    exporter("__exportStar", __exportStar);
-    exporter("__createBinding", __createBinding);
-    exporter("__values", __values);
-    exporter("__read", __read);
-    exporter("__spread", __spread);
-    exporter("__spreadArrays", __spreadArrays);
-    exporter("__await", __await);
-    exporter("__asyncGenerator", __asyncGenerator);
-    exporter("__asyncDelegator", __asyncDelegator);
-    exporter("__asyncValues", __asyncValues);
-    exporter("__makeTemplateObject", __makeTemplateObject);
-    exporter("__importStar", __importStar);
-    exporter("__importDefault", __importDefault);
-    exporter("__classPrivateFieldGet", __classPrivateFieldGet);
-    exporter("__classPrivateFieldSet", __classPrivateFieldSet);
-});
-
+module.exports = require("punycode");
 
 /***/ }),
 /* 816 */,
@@ -48998,7 +49362,7 @@ function coerce (version, options) {
 
   processors = __webpack_require__(350);
 
-  setImmediate = __webpack_require__(343).setImmediate;
+  setImmediate = __webpack_require__(213).setImmediate;
 
   defaults = __webpack_require__(791).defaults;
 
@@ -51462,6 +51826,25 @@ exports.API_BACKWARDS_COMPATIBILITY_VERSION = 0;
 
 "use strict";
 
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    Object.defineProperty(o, k2, { enumerable: true, get: function() { return m[k]; } });
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || function (mod) {
+    if (mod && mod.__esModule) return mod;
+    var result = {};
+    if (mod != null) for (var k in mod) if (k !== "default" && Object.hasOwnProperty.call(mod, k)) __createBinding(result, mod, k);
+    __setModuleDefault(result, mod);
+    return result;
+};
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -51471,14 +51854,9 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
-var __importStar = (this && this.__importStar) || function (mod) {
-    if (mod && mod.__esModule) return mod;
-    var result = {};
-    if (mod != null) for (var k in mod) if (Object.hasOwnProperty.call(mod, k)) result[k] = mod[k];
-    result["default"] = mod;
-    return result;
-};
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.getExecOutput = exports.exec = void 0;
+const string_decoder_1 = __webpack_require__(304);
 const tr = __importStar(__webpack_require__(9));
 /**
  * Exec a command.
@@ -51504,6 +51882,51 @@ function exec(commandLine, args, options) {
     });
 }
 exports.exec = exec;
+/**
+ * Exec a command and get the output.
+ * Output will be streamed to the live console.
+ * Returns promise with the exit code and collected stdout and stderr
+ *
+ * @param     commandLine           command to execute (can include additional args). Must be correctly escaped.
+ * @param     args                  optional arguments for tool. Escaping is handled by the lib.
+ * @param     options               optional exec options.  See ExecOptions
+ * @returns   Promise<ExecOutput>   exit code, stdout, and stderr
+ */
+function getExecOutput(commandLine, args, options) {
+    var _a, _b;
+    return __awaiter(this, void 0, void 0, function* () {
+        let stdout = '';
+        let stderr = '';
+        //Using string decoder covers the case where a mult-byte character is split
+        const stdoutDecoder = new string_decoder_1.StringDecoder('utf8');
+        const stderrDecoder = new string_decoder_1.StringDecoder('utf8');
+        const originalStdoutListener = (_a = options === null || options === void 0 ? void 0 : options.listeners) === null || _a === void 0 ? void 0 : _a.stdout;
+        const originalStdErrListener = (_b = options === null || options === void 0 ? void 0 : options.listeners) === null || _b === void 0 ? void 0 : _b.stderr;
+        const stdErrListener = (data) => {
+            stderr += stderrDecoder.write(data);
+            if (originalStdErrListener) {
+                originalStdErrListener(data);
+            }
+        };
+        const stdOutListener = (data) => {
+            stdout += stdoutDecoder.write(data);
+            if (originalStdoutListener) {
+                originalStdoutListener(data);
+            }
+        };
+        const listeners = Object.assign(Object.assign({}, options === null || options === void 0 ? void 0 : options.listeners), { stdout: stdOutListener, stderr: stdErrListener });
+        const exitCode = yield exec(commandLine, args, Object.assign(Object.assign({}, options), { listeners }));
+        //flush any remaining characters
+        stdout += stdoutDecoder.end();
+        stderr += stderrDecoder.end();
+        return {
+            exitCode,
+            stdout,
+            stderr
+        };
+    });
+}
+exports.getExecOutput = getExecOutput;
 //# sourceMappingURL=exec.js.map
 
 /***/ }),

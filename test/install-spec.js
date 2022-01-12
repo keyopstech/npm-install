@@ -15,6 +15,84 @@ describe('install command', () => {
   const workingDirectory = path.resolve('/current/working/directory')
   const npmCacheFolder = '/path/to/user/cache'
 
+  context('using Pnpm', () => {
+    const pathToPnpm = '/path/to/pnpm'
+
+    it('uses absolute working directory', async function() {
+      const opts = {
+        usePnpm: true,
+        useYarn: false,
+        usePackageLock: true,
+        // only use relative path
+        workingDirectory: 'directory',
+        npmCacheFolder
+      }
+      sandbox
+        .stub(io, 'which')
+        .withArgs('pnpm')
+        .resolves(pathToPnpm)
+      sandbox
+        .stub(path, 'resolve')
+        .withArgs('directory')
+        .returns(workingDirectory)
+      sandbox.stub(core, 'exportVariable')
+
+      await action.utils.install(opts)
+      expect(
+        this.exec,
+        'to use absolute working directory'
+      ).to.have.been.calledOnceWithExactly(
+        quote(pathToPnpm),
+        ['--frozen-lockfile'],
+        { cwd: workingDirectory }
+      )
+      expect(
+        core.exportVariable,
+        'npm_config_cache was set'
+      ).to.have.been.calledOnceWithExactly('npm_config_cache', npmCacheFolder)
+    })
+
+    it('and lock file', async function() {
+      const opts = {
+        usePnpm: true,
+        useYarn: false,
+        usePackageLock: true,
+        workingDirectory,
+        npmCacheFolder
+      }
+      sandbox
+        .stub(io, 'which')
+        .withArgs('pnpm')
+        .resolves(pathToPnpm)
+      await action.utils.install(opts)
+      expect(this.exec).to.have.been.calledOnceWithExactly(
+        quote(pathToPnpm),
+        ['--frozen-lockfile'],
+        { cwd: workingDirectory }
+      )
+    })
+
+    it('without lock file', async function() {
+      const opts = {
+        usePnpm: true,
+        useYarn: false,
+        usePackageLock: false,
+        workingDirectory,
+        npmCacheFolder
+      }
+      sandbox
+        .stub(io, 'which')
+        .withArgs('pnpm')
+        .resolves(pathToPnpm)
+      await action.utils.install(opts)
+      expect(this.exec).to.have.been.calledOnceWithExactly(
+        quote(pathToPnpm),
+        [],
+        { cwd: workingDirectory }
+      )
+    })
+  })
+
   context('using Yarn', () => {
     const pathToYarn = '/path/to/yarn'
 
