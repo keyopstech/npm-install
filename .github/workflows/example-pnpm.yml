@@ -10,6 +10,7 @@ jobs:
         run: |
           curl -fsSL https://get.pnpm.io/install.sh | sh -
           chmod +x /home/runner/.local/share/pnpm/pnpm
+          pnpm i
 
       - uses: ./
         with:
