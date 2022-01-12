@@ -5,6 +5,11 @@ jobs:
     runs-on: ubuntu-20.04
     steps:
       - uses: actions/checkout@v2
+
+      - uses: pnpm/action-setup@v2.0.1
+        with:
+          version: 6.0.2
+
       - uses: ./
         with:
           usePnpm: true
