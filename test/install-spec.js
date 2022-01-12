@@ -17,7 +17,6 @@ describe('install command', () => {
 
   context('using Pnpm', () => {
     const pathToPnpm = '/path/to/pnpm'
-    const pathToPnpmInstall = '/path/to/pnpm install'
 
     it('uses absolute working directory', async function() {
       const opts = {
@@ -43,8 +42,8 @@ describe('install command', () => {
         this.exec,
         'to use absolute working directory'
       ).to.have.been.calledOnceWithExactly(
-        quote(pathToPnpmInstall),
-        ['--frozen-lockfile'],
+        quote(pathToPnpm),
+        ['install --frozen-lockfile'],
         { cwd: workingDirectory }
       )
       expect(
@@ -67,8 +66,8 @@ describe('install command', () => {
         .resolves(pathToPnpm)
       await action.utils.install(opts)
       expect(this.exec).to.have.been.calledOnceWithExactly(
-        quote(pathToPnpmInstall),
-        ['--frozen-lockfile'],
+        quote(pathToPnpm),
+        ['install --frozen-lockfile'],
         { cwd: workingDirectory }
       )
     })
@@ -87,8 +86,8 @@ describe('install command', () => {
         .resolves(pathToPnpm)
       await action.utils.install(opts)
       expect(this.exec).to.have.been.calledOnceWithExactly(
-        quote(pathToPnpmInstall),
-        [],
+        quote(pathToPnpm),
+        ['install'],
         { cwd: workingDirectory }
       )
     })

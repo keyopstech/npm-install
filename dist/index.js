@@ -3021,11 +3021,13 @@ const install = (opts = {}) => {
     return io.which('pnpm', true).then(pnpmPath => {
       console.log('pnpm at "%s"', pnpmPath)
 
-      const args = shouldUsePackageLock ? ['--frozen-lockfile'] : []
+      const args = shouldUsePackageLock
+        ? ['install --frozen-lockfile']
+        : ['install']
       core.debug(
         `pnpm command: "${pnpmPath}" ${args} ${JSON.stringify(options)}`
       )
-      return exec.exec(quote(`${pnpmPath} install`), args, options)
+      return exec.exec(quote(pnpmPath), args, options)
     })
   }
 

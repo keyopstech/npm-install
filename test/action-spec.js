@@ -28,7 +28,6 @@ describe('action', () => {
 
   context('Is using Pnpm', function() {
     const pathToPnpm = '/path/to/pnpm'
-    const pathToPnpmInstall = '/path/to/pnpm install'
     const pnpmFilename = path.join(cwd, 'pnpm-lock.yaml')
     const pnpmCachePath = [path.join(homedir, '.pnpm-store')]
     const cacheKey = 'pnpm-platform-arch-hash-from-pnpm-lock-file'
@@ -68,8 +67,8 @@ describe('action', () => {
         [cacheKey]
       )
       expect(this.exec).to.be.calledOnceWithExactly(
-        quote(pathToPnpmInstall),
-        ['--frozen-lockfile'],
+        quote(pathToPnpm),
+        ['install --frozen-lockfile'],
         { cwd }
       )
       expect(this.saveCache).to.be.calledOnceWithExactly(
