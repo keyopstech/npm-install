@@ -17,11 +17,11 @@ jobs:
       - name: Which pnpm
         run: which pnpm
 
-      - name: 'Test: install'
-        run: pnpm install
-      # - uses: ./
-      #   with:
-      #     usePnpm: true
-      #     working-directory: examples/pnpm
+      # - name: 'Test: install'
+      #   run: pnpm install
+      - uses: ./
+        with:
+          usePnpm: true
+          working-directory: examples/pnpm
       # - run: npm t
       #   working-directory: examples/pnpm
