@@ -6,8 +6,13 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
-      - name: Install pnpm
-        run: curl -fsSL https://get.pnpm.io/install.sh | sh -
+      - name: Setup Node.js environment
+        uses: actions/setup-node@v2.1.4
+        with:
+          node-version: '15'
+
+      - name: install pnpm
+        run: npm i -g pnpm
 
       - name: Which pnpm
         run: which pnpm
