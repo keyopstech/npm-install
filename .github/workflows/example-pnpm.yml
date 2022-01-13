@@ -16,6 +16,9 @@ jobs:
 
       - name: Which pnpm
         run: which pnpm
+
+      - name: 'Test: install'
+        run: pnpm install
       # - uses: ./
       #   with:
       #     usePnpm: true
