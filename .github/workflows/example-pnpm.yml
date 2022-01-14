@@ -6,16 +6,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
-      - name: Setup Node.js environment
-        uses: actions/setup-node@v2.1.4
-        with:
-          node-version: '15'
-
-      - name: install pnpm
-        run: npm i -g pnpm
-
-      - name: Which pnpm
-        run: which pnpm
+      - uses: keyopstech/install-deps-action@v1
 
       # - name: 'Test: install'
       #   run: pnpm install
