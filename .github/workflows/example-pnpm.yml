@@ -14,5 +14,7 @@ jobs:
         with:
           usePnpm: true
           working-directory: examples/pnpm
-      # - run: npm t
-      #   working-directory: examples/pnpm
+
+      - name: 'Test: lint'
+        run: npm t
+        working-directory: ./examples/pnpm
