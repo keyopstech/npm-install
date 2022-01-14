@@ -6,7 +6,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
-      - uses: keyopstech/install-deps-action@v1
+      - uses: keyopstech/install-deps-action@v2
 
       # - name: 'Test: install'
       #   run: pnpm install
