@@ -6,10 +6,8 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
-      - uses: keyopstech/install-deps-action@v2.0.1
-        with:
-          recursiveInstall: true
+      - uses: keyopstech/install-deps-action@v2.0.2
 
       - name: 'Test: lint'
-        run: npm t
+        run: pnpm t
         working-directory: ./examples/pnpm
