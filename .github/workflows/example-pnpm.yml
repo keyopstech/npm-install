@@ -6,7 +6,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
-      - uses: keyopstech/install-deps-action@v2.0.2
+      - uses: keyopstech/install-deps-action@v2.0.3
 
       - name: 'Test: lint'
         run: pnpm t
